@@ -118,6 +118,8 @@ private fun ReadingRow(reading: WeatherReading, dateFormat: SimpleDateFormat) {
         Column(Modifier.padding(12.dp)) {
             Text(dateFormat.format(Date(reading.observedAtEpochMs)), style = MaterialTheme.typography.labelMedium)
             Text("Temp ${reading.temperatureC?.let { "$it °C" } ?: "—"}  ·  Humidity ${reading.humidityPct?.let { "$it %" } ?: "—"}")
+            Text("Wind ${reading.windSpeedMs?.let { "$it m/s" } ?: "—"}  ·  Gust ${reading.windGustMs?.let { "$it m/s" } ?: "—"}  ·  Direction ${reading.windDirectionDeg?.let { "$it °" } ?: "—"}")
+            Text("Solar ${reading.solarRadiationWm2?.let { "$it W/m²" } ?: "—"}  ·  UV ${reading.uvIndex?.let { "$it" } ?: "—"}")
             Text("Pressure ${reading.pressureHpa?.let { "$it hPa" } ?: "—"}  ·  Rain ${reading.rainMm?.let { "$it mm" } ?: "—"}", style = MaterialTheme.typography.bodySmall)
         }
     }
