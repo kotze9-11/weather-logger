@@ -17,8 +17,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import com.example.weatherlogger.data.StatusStore
 import com.example.weatherlogger.data.WeatherDatabase
 import com.example.weatherlogger.data.WeatherReading
 import com.example.weatherlogger.worker.WeatherPollWorker
@@ -32,6 +35,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val request = PeriodicWorkRequestBuilder<WeatherPollWorker>(15, TimeUnit.MINUTES).build()
         WorkManager.getInstance(this).enqueueUniquePeriodicWork("weathercloud-zeus-poll", ExistingPeriodicWorkPolicy.KEEP, request)
+        // Also check once right now, so you don't have to wait for the 15-minute timer.
+        WorkManager.getInstance(this).enqueueUniqueWork("weathercloud-zeus-now", ExistingWorkPolicy.REPLACE, OneTimeWorkRequestBuilder<WeatherPollWorker>().build())
         setContent { MaterialTheme { WeatherHome() } }
     }
 }
@@ -64,8 +69,8 @@ private fun WeatherHome() {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("Connection status", style = MaterialTheme.typography.titleMedium)
-                        Text("Integration awaiting endpoint verification")
-                        Text("The database and background scheduler are prepared. No readings will be invented or saved until the public WeatherCloud response is mapped.", style = MaterialTheme.typography.bodySmall)
+                        Text(StatusStore.read(context))
+                        Text("The app checks WeatherCloud about every 15 minutes. Close and reopen the app to refresh this message.", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
