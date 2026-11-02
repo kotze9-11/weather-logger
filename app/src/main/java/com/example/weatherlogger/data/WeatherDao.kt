@@ -20,6 +20,9 @@ interface WeatherDao {
     @Query("SELECT * FROM weather_readings WHERE stationId = :stationId ORDER BY observedAtEpochMs ASC")
     suspend fun allForExport(stationId: String): List<WeatherReading>
 
+    @Query("SELECT * FROM weather_readings WHERE stationId = :stationId ORDER BY observedAtEpochMs DESC LIMIT 1")
+    suspend fun latest(stationId: String): WeatherReading?
+
     @Query("SELECT COUNT(*) FROM weather_readings WHERE stationId = :stationId")
     fun count(stationId: String): Flow<Int>
 }
