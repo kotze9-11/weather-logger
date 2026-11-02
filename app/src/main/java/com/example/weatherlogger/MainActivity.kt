@@ -78,7 +78,7 @@ private fun HourlyRainChart(readings: List<WeatherReading>) {
     val buckets = remember(readings, endMs) { hourlyRain(readings, startMs, hours) }
     val total = buckets.sum()
     val peak = buckets.maxOrNull() ?: 0.0
-    val peakIndex = buckets.indexOf(peak)
+    val peakIndex = buckets.indices.maxByOrNull { buckets[it] } ?: 0
     val scaleMax = maxOf(peak, 1.0)
     val barColor = MaterialTheme.colorScheme.primary
     val axisColor = MaterialTheme.colorScheme.outline
