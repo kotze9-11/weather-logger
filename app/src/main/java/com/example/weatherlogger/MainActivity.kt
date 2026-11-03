@@ -1,10 +1,18 @@
 package com.example.weatherlogger
 
-import android.os.Bundle
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -32,6 +40,7 @@ import com.example.weatherlogger.data.WeatherCloudClient
 import com.example.weatherlogger.data.WeatherCloudException
 import com.example.weatherlogger.data.WeatherDatabase
 import com.example.weatherlogger.data.WeatherReading
+import com.example.weatherlogger.worker.PollService
 import com.example.weatherlogger.worker.WeatherPollWorker
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -44,9 +53,17 @@ import kotlin.math.floor
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        // Keeps checking in the background, even when the app screen is closed.
+        ContextCompat.startForegroundService(this, Intent(this, PollService::class.java))
+
         val request = PeriodicWorkRequestBuilder<WeatherPollWorker>(15, TimeUnit.MINUTES).build()
         WorkManager.getInstance(this).enqueueUniquePeriodicWork("weathercloud-zeus-poll", ExistingPeriodicWorkPolicy.KEEP, request)
-        // Also check once right now, so you don't have to wait for the 15-minute timer.
         WorkManager.getInstance(this).enqueueUniqueWork("weathercloud-zeus-now", ExistingWorkPolicy.REPLACE, OneTimeWorkRequestBuilder<WeatherPollWorker>().build())
         setContent { MaterialTheme { WeatherHome() } }
     }
@@ -118,21 +135,29 @@ private fun HourlyRainChart(readings: List<WeatherReading>) {
     Text("Tallest possible bar = ${"%.1f".format(scaleMax)} mm", style = MaterialTheme.typography.bodySmall)
 }
 
+/** Draws one smooth line through every point that has a value, bridging any gaps. */
 private fun DrawScope.drawSeries(values: DoubleArray, color: Color, lo: Double, hi: Double) {
     val count = values.size
-    val path = Path()
-    var penDown = false
+    val points = ArrayList<Offset>()
     for (i in 0 until count) {
         val v = values[i]
-        if (v.isNaN()) {
-            penDown = false
-            continue
-        }
+        if (v.isNaN()) continue
         val x = (i + 0.5f) * size.width / count
         val y = size.height - ((v - lo) / (hi - lo)).toFloat() * size.height
-        if (penDown) path.lineTo(x, y) else path.moveTo(x, y)
-        penDown = true
-        drawCircle(color, radius = 3f, center = Offset(x, y))
+        points.add(Offset(x, y))
+    }
+    if (points.isEmpty()) return
+    if (points.size == 1) {
+        drawCircle(color, radius = 5f, center = points[0])
+        return
+    }
+    val path = Path()
+    path.moveTo(points[0].x, points[0].y)
+    for (i in 1 until points.size) {
+        val p0 = points[i - 1]
+        val p1 = points[i]
+        val midX = (p0.x + p1.x) / 2f
+        path.cubicTo(midX, p0.y, midX, p1.y, p1.x, p1.y)
     }
     drawPath(path, color, style = Stroke(width = 4f))
 }
@@ -221,10 +246,19 @@ private fun WeatherHome() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val dao = remember { WeatherDatabase.get(context).weatherDao() }
+    val power = remember { context.getSystemService(PowerManager::class.java) }
     var exportMessage by remember { mutableStateOf("") }
     var pendingCsv by remember { mutableStateOf("") }
     var statusText by remember { mutableStateOf(StatusStore.read(context)) }
+    var unrestricted by remember { mutableStateOf(power.isIgnoringBatteryOptimizations(context.packageName)) }
     var checking by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            statusText = StatusStore.read(context)
+            unrestricted = power.isIgnoringBatteryOptimizations(context.packageName)
+            delay(5000)
+        }
+    }
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri: Uri? ->
         if (uri != null) {
             context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(pendingCsv) }
@@ -247,7 +281,7 @@ private fun WeatherHome() {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("Connection status", style = MaterialTheme.typography.titleMedium)
                         Text(statusText)
-                        Text("The app checks WeatherCloud about every 15 minutes. You can also press the button to check right now.", style = MaterialTheme.typography.bodySmall)
+                        Text("The app checks WeatherCloud about every 5 minutes, even when the screen is closed. You can also press the button to check right now.", style = MaterialTheme.typography.bodySmall)
                         Button(enabled = !checking, onClick = {
                             scope.launch {
                                 checking = true
@@ -271,6 +305,14 @@ private fun WeatherHome() {
                                 checking = false
                             }
                         }) { Text(if (checking) "Checking…" else "Check now") }
+                        if (!unrestricted) {
+                            Text("To keep checking when the phone is idle, allow the app to run without battery limits.", style = MaterialTheme.typography.bodySmall)
+                            OutlinedButton(onClick = {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
+                                )
+                            }) { Text("Allow background running") }
+                        }
                     }
                 }
             }
