@@ -278,6 +278,30 @@ private fun WindChart(readings: List<WeatherReading>) {
         Color(0xFF7FB3FF), Color(0xFF1565C0), Color(0xFF0D2A5C)) { it.windSpeedMs }
 }
 
+/** Reads a CSV made by "Export all data to CSV" back into readings. Returns null for rows it can't read. */
+private fun parseCsv(text: String): List<WeatherReading?> {
+    val formats = listOf(
+        SimpleDateFormat("dd MMM yyyy HH:mm", Locale.getDefault()),
+        SimpleDateFormat("dd MMM yyyy HH:mm", Locale.ENGLISH)
+    )
+    fun num(v: String?): Double? = v?.trim()?.takeIf { it.isNotEmpty() && it != "null" }?.toDoubleOrNull()
+    return text.lineSequence().drop(1).filter { it.isNotBlank() }.map { line ->
+        val c = line.split(",")
+        if (c.size < 13) return@map null
+        val time = formats.firstNotNullOfOrNull { f -> try { f.parse(c[0].trim())?.time } catch (e: Exception) { null } }
+            ?: return@map null
+        WeatherReading(
+            stationId = c[1].trim(),
+            observedAtEpochMs = time,
+            temperatureC = num(c[2]), humidityPct = num(c[3]), pressureHpa = num(c[4]),
+            windSpeedMs = num(c[5]), windGustMs = num(c[6]), windDirectionDeg = num(c[7]),
+            rainMm = num(c[8]), rainRateMmHr = num(c[9]), dewPointC = num(c[10]),
+            solarRadiationWm2 = num(c[11]), uvIndex = num(c[12]),
+            sourceUpdatedAtEpochMs = time
+        )
+    }.toList()
+}
+
 @Composable
 private fun WeatherHome() {
     val context = LocalContext.current
@@ -300,6 +324,23 @@ private fun WeatherHome() {
         if (uri != null) {
             context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(pendingCsv) }
             exportMessage = "CSV exported successfully"
+        }
+    }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) scope.launch {
+            exportMessage = try {
+                val text = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }.orEmpty()
+                val rows = parseCsv(text)
+                val existing = dao.allForExport("d5015340147").map { it.observedAtEpochMs / 60_000L }.toMutableSet()
+                var added = 0
+                for (r in rows.filterNotNull()) {
+                    if (existing.add(r.observedAtEpochMs / 60_000L)) { dao.insert(r); added++ }
+                }
+                val skipped = rows.count { it == null }
+                "Imported $added readings" + (if (skipped > 0) " ($skipped lines could not be read)" else "")
+            } catch (e: Exception) {
+                "Could not import that file"
+            }
         }
     }
     val readings by dao.observeAll("d5015340147").collectAsState(initial = emptyList())
@@ -386,6 +427,7 @@ private fun WeatherHome() {
                     pendingCsv = header + body
                     exportLauncher.launch("weathercloud-zeus-${System.currentTimeMillis()}.csv")
                 } }) { Text("Export all data to CSV") }
+                OutlinedButton(onClick = { importLauncher.launch(arrayOf("text/*", "application/*")) }) { Text("Import data from CSV") }
                 if (exportMessage.isNotBlank()) Text(exportMessage, style = MaterialTheme.typography.bodySmall)
             }
         }

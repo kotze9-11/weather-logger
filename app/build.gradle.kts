@@ -13,8 +13,26 @@ android {
         applicationId = "com.example.weatherlogger"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
+        // Each GitHub build gets a higher number, so the phone treats it as an update.
+        versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "1.0"
+    }
+
+    // Always sign with the same key, so a new build installs over the old one
+    // and keeps the saved readings. Without this, GitHub makes a new key every build.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("weatherlogger.keystore")
+            storePassword = "weatherlogger"
+            keyAlias = "weatherlogger"
+            keyPassword = "weatherlogger"
+        }
+    }
+
+    buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("debug")
+        }
     }
 
     buildFeatures {
