@@ -19,7 +19,6 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -162,8 +161,23 @@ private fun DrawScope.drawSeries(values: DoubleArray, color: Color, lo: Double, 
     drawPath(path, color, style = Stroke(width = 4f))
 }
 
+private fun compass(deg: Double): String {
+    val names = listOf("N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW")
+    return names[((((deg % 360) + 360) % 360) / 22.5 + 0.5).toInt() % 16]
+}
+
+/** A Day / Week / Month line graph showing the min, average and max of one kind of reading. */
 @Composable
-private fun TemperatureChart(readings: List<WeatherReading>) {
+private fun RangeChart(
+    title: String,
+    unit: String,
+    readings: List<WeatherReading>,
+    latestText: String?,
+    minColor: Color,
+    avgColor: Color,
+    maxColor: Color,
+    value: (WeatherReading) -> Double?
+) {
     var range by remember { mutableStateOf("Day") }
     val now = System.currentTimeMillis()
     val hourMs = 3_600_000L
@@ -173,44 +187,42 @@ private fun TemperatureChart(readings: List<WeatherReading>) {
     val endMs = ((now + offset) / bucketMs + 1) * bucketMs - offset
     val startMs = endMs - bucketMs * count
 
-    val inRange = readings.filter { it.temperatureC != null && it.observedAtEpochMs >= startMs && it.observedAtEpochMs < endMs }
+    val inRange = readings.filter { value(it) != null && it.observedAtEpochMs >= startMs && it.observedAtEpochMs < endMs }
     val mins = DoubleArray(count) { Double.NaN }
     val avgs = DoubleArray(count) { Double.NaN }
     val maxs = DoubleArray(count) { Double.NaN }
     val groups = inRange.groupBy { ((it.observedAtEpochMs - startMs) / bucketMs).toInt().coerceIn(0, count - 1) }
     for ((i, list) in groups) {
-        val t = list.mapNotNull { it.temperatureC }
-        if (t.isNotEmpty()) {
-            mins[i] = t.minOrNull() ?: Double.NaN
-            avgs[i] = t.average()
-            maxs[i] = t.maxOrNull() ?: Double.NaN
+        val v = list.mapNotNull(value)
+        if (v.isNotEmpty()) {
+            mins[i] = v.minOrNull() ?: Double.NaN
+            avgs[i] = v.average()
+            maxs[i] = v.maxOrNull() ?: Double.NaN
         }
     }
-    val all = inRange.mapNotNull { it.temperatureC }
+    val all = inRange.mapNotNull(value)
     val overallMin = all.minOrNull()
     val overallMax = all.maxOrNull()
     val lo = floor(overallMin ?: 0.0)
     var hi = ceil(overallMax ?: 1.0)
     if (hi - lo < 2.0) hi = lo + 2.0
 
-    val minColor = Color(0xFFFF7070)
-    val avgColor = Color(0xFFE00000)
-    val maxColor = Color(0xFF8B1A1A)
     val gridColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
     val labelFormat = remember(range) { SimpleDateFormat(if (range == "Day") "HH:mm" else "dd MMM", Locale.getDefault()) }
     val labelIndexes = if (range == "Day") listOf(0, 6, 12, 18, 23) else listOf(0, count / 2, count - 1)
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("Temperature (°C)", style = MaterialTheme.typography.titleMedium)
+        Text("$title ($unit)", style = MaterialTheme.typography.titleMedium)
+        Text(latestText ?: "Latest: no reading yet", style = MaterialTheme.typography.bodyLarge)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("Day", "Week", "Month").forEach { label ->
                 FilterChip(selected = range == label, onClick = { range = label }, label = { Text(label) })
             }
         }
         if (all.isEmpty()) {
-            Text("No temperature readings in this period yet")
+            Text("No readings in this period yet")
         } else {
-            Text("Min ${"%.1f".format(overallMin)} · Avg ${"%.1f".format(all.average())} · Max ${"%.1f".format(overallMax)} °C")
+            Text("Min ${"%.1f".format(overallMin)} · Avg ${"%.1f".format(all.average())} · Max ${"%.1f".format(overallMax)} $unit")
         }
         Row(Modifier.fillMaxWidth()) {
             Column(Modifier.height(140.dp), verticalArrangement = Arrangement.SpaceBetween) {
@@ -239,6 +251,31 @@ private fun TemperatureChart(readings: List<WeatherReading>) {
             Text("— Max", color = maxColor, style = MaterialTheme.typography.bodySmall)
         }
     }
+}
+
+@Composable
+private fun TemperatureChart(readings: List<WeatherReading>) {
+    val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+    val latest = readings.firstOrNull { it.temperatureC != null }
+    val latestText = latest?.let { "Latest: ${"%.1f".format(it.temperatureC)} °C at ${timeFormat.format(Date(it.observedAtEpochMs))}" }
+    RangeChart("Temperature", "°C", readings, latestText,
+        Color(0xFFFF7070), Color(0xFFE00000), Color(0xFF8B1A1A)) { it.temperatureC }
+}
+
+@Composable
+private fun WindChart(readings: List<WeatherReading>) {
+    val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+    val latest = readings.firstOrNull { it.windSpeedMs != null }
+    val latestText = latest?.let { r ->
+        buildString {
+            append("Latest: ${"%.1f".format(r.windSpeedMs)} km/h")
+            r.windDirectionDeg?.let { append(" from ${compass(it)}") }
+            r.windGustMs?.let { append(", gusts ${"%.1f".format(it)} km/h") }
+            append(" at ${timeFormat.format(Date(r.observedAtEpochMs))}")
+        }
+    }
+    RangeChart("Wind speed", "km/h", readings, latestText,
+        Color(0xFF7FB3FF), Color(0xFF1565C0), Color(0xFF0D2A5C)) { it.windSpeedMs }
 }
 
 @Composable
@@ -339,6 +376,7 @@ private fun WeatherHome() {
                 Text("Average humidity: ${humidities.takeIf { it.isNotEmpty() }?.average()?.let { "%.0f".format(it) } ?: "—"}% · Rain total: ${"%.1f".format(rain)} mm")
             }
             item { TemperatureChart(readings) }
+            item { WindChart(readings) }
             item { HourlyRainChart(readings) }
             item {
                 Button(onClick = { scope.launch {
@@ -350,26 +388,6 @@ private fun WeatherHome() {
                 } }) { Text("Export all data to CSV") }
                 if (exportMessage.isNotBlank()) Text(exportMessage, style = MaterialTheme.typography.bodySmall)
             }
-            item { Text("Recent records", style = MaterialTheme.typography.titleMedium) }
-            items(readings.take(30)) { reading -> ReadingRow(reading, dateFormat) }
-        }
-    }
-}
-
-private fun compass(deg: Double): String {
-    val names = listOf("N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW")
-    return names[((((deg % 360) + 360) % 360) / 22.5 + 0.5).toInt() % 16]
-}
-
-@Composable
-private fun ReadingRow(reading: WeatherReading, dateFormat: SimpleDateFormat) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp)) {
-            Text(dateFormat.format(Date(reading.observedAtEpochMs)), style = MaterialTheme.typography.labelMedium)
-            Text("Temp ${reading.temperatureC?.let { "$it °C" } ?: "—"}  ·  Humidity ${reading.humidityPct?.let { "$it %" } ?: "—"}")
-            Text("Wind ${reading.windSpeedMs?.let { "$it km/h" } ?: "—"}  ·  Gust ${reading.windGustMs?.let { "$it km/h" } ?: "—"}  ·  Direction ${reading.windDirectionDeg?.let { "${compass(it)} (${it.toInt()}°)" } ?: "—"}")
-            Text("Solar ${reading.solarRadiationWm2?.let { "$it W/m²" } ?: "—"}  ·  UV ${reading.uvIndex?.let { "$it" } ?: "—"}")
-            Text("Pressure ${reading.pressureHpa?.let { "$it hPa" } ?: "—"}  ·  Rain ${reading.rainMm?.let { "$it mm" } ?: "—"}", style = MaterialTheme.typography.bodySmall)
         }
     }
 }
